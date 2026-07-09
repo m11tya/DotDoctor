@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dotdoctor"
+version = "0.1.0"
+description = "DotDoctor: Linux development environment diagnostics CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "DotDoctor Contributors" }
+]
+dependencies = [
+  "typer>=0.16.0,<1.0.0",
+  "rich>=14.0.0,<15.0.0",
+  "pydantic>=2.8.0,<3.0.0",
+  "PyYAML>=6.0.0,<7.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0,<9.0.0",
+  "pytest-cov>=5.0.0,<6.0.0",
+  "black>=24.0.0,<25.0.0",
+  "ruff>=0.6.0,<1.0.0",
+  "mypy>=1.10.0,<2.0.0",
+  "types-PyYAML>=6.0.12"
+]
+
+[project.scripts]
+dotdoctor = "dotdoctor.main:run"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+strict_optional = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dotdoctor"]
