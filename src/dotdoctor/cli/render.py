@@ -8,28 +8,54 @@ from rich.text import Text
 from dotdoctor.domain.models import CheckResult, ScanReport
 
 
+def _status_style(status: str) -> str:
+    return {
+        "PASS": "green",
+        "OUTD": "blue",
+        "WARN": "yellow",
+        "FAIL": "red",
+    }.get(status, "white")
+
+
+def _summary_text(summary: dict[str, int], exit_code: int) -> Text:
+    text = Text("Summary: ")
+    text.append(f"PASS={summary['PASS']}", style="green")
+    text.append(" ")
+    text.append(f"OUTD={summary.get('OUTD', 0)}", style="blue")
+    text.append(" ")
+    text.append(f"WARN={summary['WARN']}", style="yellow")
+    text.append(" ")
+    text.append(f"FAIL={summary['FAIL']}", style="red")
+    text.append(" | ")
+
+    exit_style = "green" if exit_code == 0 else ("yellow" if exit_code == 1 else "red")
+    text.append(f"Exit={exit_code}", style=exit_style)
+    return text
+
+
 def render_terminal_report(report: ScanReport, console: Console) -> None:
     table = Table(title=f"DotDoctor Scan ({report.profile})")
-    table.add_column("Check ID", style="cyan")
+    table.add_column("Check ID")
     table.add_column("Status", style="bold")
     table.add_column("Message")
     table.add_column("Remediation")
 
     for result in report.results:
+        status_style = f"bold {_status_style(result.severity.value)}"
+        status_text = Text(result.severity.value, style=status_style)
+        remediation_text = (
+            Text(result.remediation, style="cyan") if result.remediation else Text("-")
+        )
         table.add_row(
             result.check_id,
-            result.severity.value,
+            status_text,
             result.message,
-            result.remediation or "-",
+            remediation_text,
         )
 
     summary = report.summary
     console.print(table)
-    summary_line = (
-        f"Summary: PASS={summary['PASS']} WARN={summary['WARN']} "
-        f"FAIL={summary['FAIL']} | Exit={report.exit_code}"
-    )
-    console.print(summary_line)
+    console.print(_summary_text(summary, report.exit_code))
 
 
 def build_live_dashboard(
@@ -57,7 +83,10 @@ def build_live_dashboard(
     progress_bar = "[" + ("#" * filled) + ("-" * (bar_width - filled)) + "]"
     progress_table.add_row(
         f"Progress {progress_bar} {completed}/{total_checks}",
-        f"PASS={summary['PASS']} WARN={summary['WARN']} FAIL={summary['FAIL']}",
+        (
+            f"PASS={summary['PASS']} OUTD={summary.get('OUTD', 0)} "
+            f"WARN={summary['WARN']} FAIL={summary['FAIL']}"
+        ),
     )
 
     state_message = f"Running: {active_check_id}" if active_check_id else "Completed"
@@ -69,11 +98,7 @@ def build_live_dashboard(
     rows_table.add_column("Message")
 
     for result in results[-10:]:
-        status_style = {
-            "PASS": "green",
-            "WARN": "yellow",
-            "FAIL": "red",
-        }.get(result.severity.value, "white")
+        status_style = _status_style(result.severity.value)
         rows_table.add_row(
             result.check_id,
             f"[{status_style}]{result.severity.value}[/{status_style}]",
