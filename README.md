@@ -1,5 +1,4 @@
-<img width="1920" height="1080" alt="dotdoctor demo" src="https://github.com/user-attachments/assets/95f0b796-7ce4-460e-818f-5673a58212b7" />
-
+<img width="1920" height="1080" alt="dotdoctordemo" src="https://github.com/user-attachments/assets/fab6e611-6b17-410c-8ce9-ffcdf2b31a50" />
 
 DotDoctor
 =========
