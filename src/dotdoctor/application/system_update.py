@@ -104,11 +104,12 @@ class SystemDryRunService:
                     if on_task_complete is not None:
                         on_task_complete(task.check_id)
 
-        return [
-            ordered_results[task.check_id]
-            for task in tasks
-            if ordered_results.get(task.check_id) is not None
-        ]
+        collected_results: list[CheckResult] = []
+        for task in tasks:
+            result = ordered_results.get(task.check_id)
+            if result is not None:
+                collected_results.append(result)
+        return collected_results
 
     def _check_arch_packages(self, context: ScanContext) -> CheckResult:
         if shutil.which("checkupdates") is None:

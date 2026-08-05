@@ -175,6 +175,7 @@ def _system_dry_run_impl() -> None:
         steps.add_column(justify="left")
         steps.add_column(justify="left")
         for task in tasks:
+            status: str | Spinner
             if states[task.check_id] == "done":
                 status = "[green]Done[/green]"
             else:
