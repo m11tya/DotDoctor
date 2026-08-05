@@ -126,8 +126,7 @@ class SystemDryRunService:
                 severity=Severity.FAIL,
                 message="checkupdates timed out — mirror or network connection failure.",
                 remediation=(
-                    "Run rate-mirrors or reflector to refresh your mirror list, "
-                    "then retry."
+                    "Run rate-mirrors or reflector to refresh your mirror list, " "then retry."
                 ),
             )
         if result.completed is None:
@@ -346,19 +345,21 @@ def _result_for_count(check_id: str, updates: int) -> CheckResult:
     )
 
 
-_NETWORK_FAILURE_PATTERNS: frozenset[str] = frozenset({
-    "failed to retrieve",
-    "failed to synchronize",
-    "couldn't connect to server",
-    "connection timed out",
-    "download library error",
-    "error: failed to update",
-    "failed to download",
-    "curl error",
-    "resolving timed out",
-    "failed to get",
-    "could not connect",
-})
+_NETWORK_FAILURE_PATTERNS: frozenset[str] = frozenset(
+    {
+        "failed to retrieve",
+        "failed to synchronize",
+        "couldn't connect to server",
+        "connection timed out",
+        "download library error",
+        "error: failed to update",
+        "failed to download",
+        "curl error",
+        "resolving timed out",
+        "failed to get",
+        "could not connect",
+    }
+)
 
 _AUR_FLAGGED_RE = re.compile(
     r"\[(?:out[- ]of[- ]date|flagged[- ]out[- ]of[- ]date)\b",
@@ -489,9 +490,7 @@ class SystemUpgradeService:
             console.print("[dim]Skipping Oh-My-Zsh update: component is not installed.[/dim]")
 
         if shutil.which("fwupdmgr") is not None:
-            fw_error, _ = self._run_step(
-                ["fwupdmgr", "update", "-y"], console, "Firmware update"
-            )
+            fw_error, _ = self._run_step(["fwupdmgr", "update", "-y"], console, "Firmware update")
             had_error |= fw_error
         else:
             console.print("[dim]Skipping firmware update: component is not installed.[/red]")

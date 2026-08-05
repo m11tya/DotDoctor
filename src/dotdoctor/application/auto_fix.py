@@ -71,8 +71,7 @@ class InteractiveAutoFixer:
                 )
             else:
                 self._console.print(
-                    f"[yellow]No changes applied[/yellow] for {result.check_id}: "
-                    f"{outcome.note}"
+                    f"[yellow]No changes applied[/yellow] for {result.check_id}: " f"{outcome.note}"
                 )
 
         if not had_issues:
@@ -102,10 +101,7 @@ class InteractiveAutoFixer:
         if empty_segments:
             return "Empty PATH segments detected. Rewrite shell PATH export now?"
         if result.check_id != "path.integrity":
-            return (
-                f"Issue found in {result.check_id}. "
-                "Try automated remediation if available?"
-            )
+            return f"Issue found in {result.check_id}. " "Try automated remediation if available?"
         return "PATH issues detected. Apply automatic cleanup now?"
 
     def _fix_path_integrity(self, context: ScanContext, result: CheckResult) -> FixOutcome:
@@ -162,10 +158,14 @@ class InteractiveAutoFixer:
                 self._selected_shell = preferred
             else:
                 default_shell = "zsh" if (context.shell or "").endswith("zsh") else "bash"
-                picked = typer.prompt(
-                    "Choose shell config for auto-fix updates (bash/zsh)",
-                    default=default_shell,
-                ).strip().lower()
+                picked = (
+                    typer.prompt(
+                        "Choose shell config for auto-fix updates (bash/zsh)",
+                        default=default_shell,
+                    )
+                    .strip()
+                    .lower()
+                )
                 self._selected_shell = "zsh" if picked.startswith("z") else "bash"
                 prefs["shell"] = self._selected_shell
                 self._save_preferences(context.home, prefs)

@@ -180,11 +180,7 @@ def test_system_dry_run_firmware_detects_explicit_version_transition(
             return SimpleNamespace(stdout="", returncode=0)
         if command[:2] == ["fwupdmgr", "get-updates"]:
             return SimpleNamespace(
-                stdout=(
-                    "Device: Sample Device\n"
-                    "Current version: 1.2.3\n"
-                    "1.2.3 -> 1.2.4\n"
-                ),
+                stdout=("Device: Sample Device\n" "Current version: 1.2.3\n" "1.2.3 -> 1.2.4\n"),
                 returncode=0,
             )
         raise AssertionError(f"Unexpected command: {command}")
@@ -317,9 +313,7 @@ def test_system_upgrade_network_failure_triggers_mirror_recovery(
     assert any("mirror" in msg.lower() or "network" in msg.lower() for msg in console.messages)
 
 
-def test_system_upgrade_fatal_network_error_returns_exit_one(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_system_upgrade_fatal_network_error_returns_exit_one(monkeypatch, tmp_path: Path) -> None:
     service = SystemUpgradeService()
     console = DummyConsole()
 

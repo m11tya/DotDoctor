@@ -85,7 +85,7 @@ profiles:
     home = tmp_path / "home"
     home.mkdir()
     bashrc = home / ".bashrc"
-    bashrc.write_text("export PATH=\"$PATH:/missing/path\"\n", encoding="utf-8")
+    bashrc.write_text('export PATH="$PATH:/missing/path"\n', encoding="utf-8")
 
     result = runner.invoke(
         app,
