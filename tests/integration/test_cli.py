@@ -2,8 +2,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from dotdoctor.domain.models import CheckResult, ScanReport, Severity
 from dotdoctor.cli.app import app
+from dotdoctor.domain.models import CheckResult, ScanReport, Severity
 
 runner = CliRunner()
 

@@ -1,8 +1,9 @@
 import json
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -69,7 +70,10 @@ class InteractiveAutoFixer:
                     details={**result.details, "auto_fixed": True},
                 )
             else:
-                self._console.print(f"[yellow]No changes applied[/yellow] for {result.check_id}: {outcome.note}")
+                self._console.print(
+                    f"[yellow]No changes applied[/yellow] for {result.check_id}: "
+                    f"{outcome.note}"
+                )
 
         if not had_issues:
             self._console.print("[green]Nothing to fix. All checks are PASS.[/green]")

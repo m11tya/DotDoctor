@@ -1,9 +1,9 @@
+import os
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-import os
-import re
 from dataclasses import dataclass
 
 from rich.console import Console
@@ -125,7 +125,10 @@ class SystemDryRunService:
                 check_id="sys:packages",
                 severity=Severity.FAIL,
                 message="checkupdates timed out — mirror or network connection failure.",
-                remediation="Run rate-mirrors or reflector to refresh your mirror list, then retry.",
+                remediation=(
+                    "Run rate-mirrors or reflector to refresh your mirror list, "
+                    "then retry."
+                ),
             )
         if result.completed is None:
             return CheckResult(
@@ -305,8 +308,14 @@ class SystemDryRunService:
             return CheckResult(
                 check_id="sys:aur",
                 severity=Severity.OUTD,
-                message=f"Found {len(regular)} AUR update(s) and {len(flagged)} flagged out-of-date package(s).",
-                remediation="Run dotdoctor --sysup to apply available AUR updates. Flagged packages require upstream or maintainer action.",
+                message=(
+                    f"Found {len(regular)} AUR update(s) and {len(flagged)} "
+                    "flagged out-of-date package(s)."
+                ),
+                remediation=(
+                    "Run dotdoctor --sysup to apply available AUR updates. "
+                    "Flagged packages require upstream or maintainer action."
+                ),
                 details={"updates": len(regular), "flagged": len(flagged)},
             )
         return CheckResult(
@@ -436,7 +445,8 @@ class SystemUpgradeService:
             )
             if yay_error and is_net_failure:
                 console.print(
-                    "[yellow]Mirror or network failure detected. Attempting mirror recovery...[/yellow]"
+                    "[yellow]Mirror or network failure detected. "
+                    "Attempting mirror recovery...[/yellow]"
                 )
                 mirror_failed = self._refresh_mirrors(console)
                 if mirror_failed:

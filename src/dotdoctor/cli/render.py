@@ -41,8 +41,11 @@ def render_terminal_report(report: ScanReport, console: Console) -> None:
     table.add_column("Remediation")
 
     for result in report.results:
-        status_text = Text(result.severity.value, style=f"bold {_status_style(result.severity.value)}")
-        remediation_text = Text(result.remediation, style="cyan") if result.remediation else Text("-")
+        status_style = f"bold {_status_style(result.severity.value)}"
+        status_text = Text(result.severity.value, style=status_style)
+        remediation_text = (
+            Text(result.remediation, style="cyan") if result.remediation else Text("-")
+        )
         table.add_row(
             result.check_id,
             status_text,
