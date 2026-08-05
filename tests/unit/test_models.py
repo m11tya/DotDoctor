@@ -10,8 +10,8 @@ def test_scan_report_summary_and_exit_code_warn() -> None:
         ],
     )
 
-    assert report.summary == {"PASS": 1, "WARN": 1, "FAIL": 0}
-    assert report.exit_code == 1
+    assert report.summary == {"PASS": 1, "OUTD": 0, "WARN": 1, "FAIL": 0}
+    assert report.exit_code == 0
 
 
 def test_scan_report_exit_code_fail_takes_priority() -> None:

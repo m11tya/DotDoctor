@@ -5,7 +5,11 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.live import Live
+from rich.spinner import Spinner
+from rich.table import Table
 
+from dotdoctor.application.auto_fix import InteractiveAutoFixer
+from dotdoctor.application.system_update import SystemDryRunService, SystemUpgradeService
 from dotdoctor.application.use_cases import RunScanUseCase
 from dotdoctor.cli.render import build_live_dashboard, render_terminal_report
 from dotdoctor.domain.context import ScanContext
@@ -36,17 +40,49 @@ UI_OPTION = typer.Option(
     "--ui/--no-ui",
     help="Use fullscreen live interface during scan.",
 )
+FIX_OPTION = typer.Option(
+    False,
+    "--fix",
+    help="Interactively apply safe auto-fixes for WARN/FAIL findings.",
+)
+SYS_OPTION = typer.Option(
+    False,
+    "--sys",
+    help="Run parallel dry-run system update checks.",
+)
+SYSUP_OPTION = typer.Option(
+    False,
+    "--sysup",
+    help="Run sequential real system update commands.",
+)
 
 
 @app.callback(invoke_without_command=True)
-def root(ctx: typer.Context) -> None:
+def root(
+    ctx: typer.Context,
+    fix: bool = FIX_OPTION,
+    sys: bool = SYS_OPTION,
+    sysup: bool = SYSUP_OPTION,
+) -> None:
     if ctx.invoked_subcommand is None:
+        if sys and sysup:
+            raise typer.BadParameter("Use either --sys or --sysup, not both.")
+
+        if sys:
+            _system_dry_run_impl()
+            return
+
+        if sysup:
+            _system_upgrade_impl()
+            return
+
         _scan_impl(
             profile="python-dev",
             config=None,
             disable_check=[],
             json_output=None,
             ui=True,
+            fix=fix,
         )
 
 
@@ -64,8 +100,9 @@ def scan(
     disable_check: list[str] = DISABLE_CHECK_OPTION,
     json_output: Path | None = JSON_OUTPUT_OPTION,
     ui: bool = UI_OPTION,
+    fix: bool = FIX_OPTION,
 ) -> None:
-    _scan_impl(profile, config, disable_check, json_output, ui)
+    _scan_impl(profile, config, disable_check, json_output, ui, fix)
 
 
 def _scan_impl(
@@ -74,6 +111,7 @@ def _scan_impl(
     disable_check: list[str],
     json_output: Path | None,
     ui: bool,
+    fix: bool,
 ) -> None:
     console = Console()
 
@@ -93,7 +131,14 @@ def _scan_impl(
         )
 
         use_case = RunScanUseCase(resolve_checks(selected_profile, set(disable_check)))
-        report = _run_scan(use_case, context, console, ui=ui)
+        if fix:
+            report = use_case.execute(context)
+        else:
+            report = _run_scan(use_case, context, console, ui=ui)
+
+        if fix:
+            fixer = InteractiveAutoFixer(console)
+            report = fixer.apply(report, context)
 
         if json_output is not None:
             json_output.parent.mkdir(parents=True, exist_ok=True)
@@ -109,6 +154,62 @@ def _scan_impl(
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]DotDoctor runtime error:[/red] {exc}")
         raise typer.Exit(code=3) from None
+
+
+def _system_dry_run_impl() -> None:
+    console = Console()
+    context = ScanContext(
+        profile="system",
+        cwd=Path.cwd(),
+        home=Path.home(),
+        path_value=os.environ.get("PATH", ""),
+        shell=os.environ.get("SHELL"),
+    )
+    service = SystemDryRunService()
+    tasks = service.build_tasks(context)
+
+    states: dict[str, str] = {task.check_id: "running" for task in tasks}
+
+    def _build_steps_table() -> Table:
+        steps = Table.grid(expand=False)
+        steps.add_column(justify="left")
+        steps.add_column(justify="left")
+        for task in tasks:
+            if states[task.check_id] == "done":
+                status = "[green]Done[/green]"
+            else:
+                status = Spinner("dots", text="Running")
+            steps.add_row(task.label, status)
+        return steps
+
+    with Live(
+        _build_steps_table(),
+        console=console,
+        transient=True,
+        refresh_per_second=12,
+    ) as live:
+
+        def _mark_done(check_id: str) -> None:
+            states[check_id] = "done"
+            live.update(_build_steps_table())
+
+        report = service.run_with_progress(context, on_task_complete=_mark_done)
+
+    render_terminal_report(report, console)
+    raise typer.Exit(code=report.exit_code)
+
+
+def _system_upgrade_impl() -> None:
+    console = Console()
+    context = ScanContext(
+        profile="system",
+        cwd=Path.cwd(),
+        home=Path.home(),
+        path_value=os.environ.get("PATH", ""),
+        shell=os.environ.get("SHELL"),
+    )
+    code = SystemUpgradeService().run(context, console)
+    raise typer.Exit(code=code)
 
 
 def _run_scan(
