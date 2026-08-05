@@ -1,4 +1,5 @@
-https://github.com/user-attachments/assets/9442c6fd-868e-447e-bfd5-694474ebff0f
+<img width="1920" height="1080" alt="dotdoctor demo" src="https://github.com/user-attachments/assets/95f0b796-7ce4-460e-818f-5673a58212b7" />
+
 
 DotDoctor
 =========
