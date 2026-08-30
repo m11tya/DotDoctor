@@ -2,7 +2,14 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from dotdoctor.application.system_update import SystemDryRunService, SystemUpgradeService
+from dotdoctor.application.system_update import (
+    DiskSpaceStatus,
+    RebootStatus,
+    SystemDryRunService,
+    SystemUpgradeService,
+    detect_disk_space_status,
+    detect_reboot_status,
+)
 from dotdoctor.domain.context import ScanContext
 from dotdoctor.domain.models import Severity
 
@@ -47,6 +54,25 @@ def test_system_dry_run_marks_outd_when_updates_detected(monkeypatch, tmp_path: 
 
     monkeypatch.setattr("dotdoctor.application.system_update.shutil.which", fake_which)
     monkeypatch.setattr("dotdoctor.application.system_update.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "dotdoctor.application.system_update.detect_reboot_status",
+        lambda: RebootStatus(
+            required=False,
+            reason=None,
+            running_kernel="7.1.9",
+            installed_kernels=["7.1.9"],
+        ),
+    )
+    monkeypatch.setattr(
+        "dotdoctor.application.system_update.detect_disk_space_status",
+        lambda: DiskSpaceStatus(
+            root_free_bytes=50 * 1024**3,
+            boot_free_bytes=500 * 1024**2,
+            severity=Severity.PASS,
+            message="Disk space is healthy.",
+            remediation=None,
+        ),
+    )
 
     (tmp_path / ".oh-my-zsh").mkdir()
     report = service.run(_context(tmp_path))
@@ -57,11 +83,32 @@ def test_system_dry_run_marks_outd_when_updates_detected(monkeypatch, tmp_path: 
     assert by_id["sys:firmware"].severity is Severity.OUTD
     assert by_id["sys:aur"].severity is Severity.OUTD
     assert by_id["sys:shell-omz"].severity is Severity.PASS
+    assert by_id["sys:reboot"].severity is Severity.PASS
+    assert by_id["sys:disk"].severity is Severity.PASS
 
 
 def test_system_dry_run_skips_missing_components(monkeypatch, tmp_path: Path) -> None:
     service = SystemDryRunService()
     monkeypatch.setattr("dotdoctor.application.system_update.shutil.which", lambda _: None)
+    monkeypatch.setattr(
+        "dotdoctor.application.system_update.detect_reboot_status",
+        lambda: RebootStatus(
+            required=False,
+            reason=None,
+            running_kernel="7.1.9",
+            installed_kernels=["7.1.9"],
+        ),
+    )
+    monkeypatch.setattr(
+        "dotdoctor.application.system_update.detect_disk_space_status",
+        lambda: DiskSpaceStatus(
+            root_free_bytes=50 * 1024**3,
+            boot_free_bytes=500 * 1024**2,
+            severity=Severity.PASS,
+            message="Disk space is healthy.",
+            remediation=None,
+        ),
+    )
 
     report = service.run(_context(tmp_path))
 
@@ -221,7 +268,16 @@ def test_system_upgrade_runs_steps_and_reports_success(monkeypatch, tmp_path: Pa
     assert code == 0
     assert ["sudo", "true"] in commands
     assert ["sudo", "cachyos-rate-mirrors"] in commands
-    assert ["yay", "-Syu", "--noconfirm"] in commands
+    assert [
+        "yay",
+        "-Syu",
+        "--noconfirm",
+        "--sudoloop",
+        "--answerclean",
+        "None",
+        "--answerdiff",
+        "None",
+    ] in commands
     assert ["flatpak", "update", "-y"] in commands
     assert ["fwupdmgr", "update", "-y"] in commands
     assert ["sh", str(omz_dir / "upgrade.sh")] in commands
@@ -280,6 +336,16 @@ def test_system_upgrade_network_failure_triggers_mirror_recovery(
     console = DummyConsole()
     commands: list[list[str]] = []
     yay_attempt = [0]
+    expected_yay_cmd = [
+        "yay",
+        "-Syu",
+        "--noconfirm",
+        "--sudoloop",
+        "--answerclean",
+        "None",
+        "--answerdiff",
+        "None",
+    ]
 
     def fake_which(name: str) -> str | None:
         if name in {"yay", "cachyos-rate-mirrors"}:
@@ -293,7 +359,7 @@ def test_system_upgrade_network_failure_triggers_mirror_recovery(
             return SimpleNamespace(returncode=0, stderr="")
         if command == ["sudo", "cachyos-rate-mirrors"]:
             return SimpleNamespace(returncode=0, stderr="")
-        if command == ["yay", "-Syu", "--noconfirm"]:
+        if command == expected_yay_cmd:
             yay_attempt[0] += 1
             if yay_attempt[0] == 1:
                 return SimpleNamespace(returncode=1, stderr="failed to retrieve some files")
@@ -305,7 +371,7 @@ def test_system_upgrade_network_failure_triggers_mirror_recovery(
 
     code = service.run(_context(tmp_path), console)
 
-    yay_calls = sum(1 for c in commands if c == ["yay", "-Syu", "--noconfirm"])
+    yay_calls = sum(1 for c in commands if c == expected_yay_cmd)
     mirror_calls = sum(1 for c in commands if c == ["sudo", "cachyos-rate-mirrors"])
     assert yay_calls == 2
     assert mirror_calls == 2
@@ -316,6 +382,16 @@ def test_system_upgrade_network_failure_triggers_mirror_recovery(
 def test_system_upgrade_fatal_network_error_returns_exit_one(monkeypatch, tmp_path: Path) -> None:
     service = SystemUpgradeService()
     console = DummyConsole()
+    expected_yay_cmd = [
+        "yay",
+        "-Syu",
+        "--noconfirm",
+        "--sudoloop",
+        "--answerclean",
+        "None",
+        "--answerdiff",
+        "None",
+    ]
 
     def fake_which(name: str) -> str | None:
         if name in {"yay", "cachyos-rate-mirrors"}:
@@ -328,7 +404,7 @@ def test_system_upgrade_fatal_network_error_returns_exit_one(monkeypatch, tmp_pa
             return SimpleNamespace(returncode=0, stderr="")
         if command == ["sudo", "cachyos-rate-mirrors"]:
             return SimpleNamespace(returncode=0, stderr="")
-        if command == ["yay", "-Syu", "--noconfirm"]:
+        if command == expected_yay_cmd:
             return SimpleNamespace(returncode=1, stderr="failed to retrieve some files")
         raise AssertionError(f"Unexpected command: {command}")
 
@@ -338,3 +414,173 @@ def test_system_upgrade_fatal_network_error_returns_exit_one(monkeypatch, tmp_pa
     code = service.run(_context(tmp_path), console)
     assert code == 1
     assert any("FAIL" in msg for msg in console.messages)
+
+
+def test_detect_reboot_status_matching_kernel(tmp_path: Path) -> None:
+    modules_dir = tmp_path / "modules"
+    (modules_dir / "7.1.9-arch1-2").mkdir(parents=True)
+
+    status = detect_reboot_status(
+        modules_dir=modules_dir,
+        running_kernel="7.1.9-arch1-2",
+        marker_paths=(),
+    )
+    assert status.required is False
+    assert status.reason is None
+    assert status.installed_kernels == ["7.1.9-arch1-2"]
+
+
+def test_detect_reboot_status_kernel_mismatch(tmp_path: Path) -> None:
+    modules_dir = tmp_path / "modules"
+    (modules_dir / "7.1.11-arch1-1").mkdir(parents=True)
+
+    status = detect_reboot_status(
+        modules_dir=modules_dir,
+        running_kernel="7.1.9-arch1-2",
+        marker_paths=(),
+    )
+    assert status.required is True
+    assert "7.1.9-arch1-2" in status.reason
+    assert "7.1.11-arch1-1" in status.reason
+    assert status.installed_kernels == ["7.1.11-arch1-1"]
+
+
+def test_detect_reboot_status_marker_file(tmp_path: Path) -> None:
+    modules_dir = tmp_path / "modules"
+    (modules_dir / "7.1.9").mkdir(parents=True)
+    marker = tmp_path / "reboot-required"
+    marker.write_text("", encoding="utf-8")
+
+    status = detect_reboot_status(
+        modules_dir=modules_dir,
+        running_kernel="7.1.9",
+        marker_paths=(str(marker),),
+    )
+    assert status.required is True
+    assert "reboot-required" in status.reason
+
+
+def test_detect_reboot_status_marker_file_with_packages(tmp_path: Path) -> None:
+    modules_dir = tmp_path / "modules"
+    (modules_dir / "7.1.9").mkdir(parents=True)
+    marker = tmp_path / "reboot-required"
+    marker.write_text("", encoding="utf-8")
+    pkgs = tmp_path / "reboot-required.pkgs"
+    pkgs.write_text("linux\nsystemd\n", encoding="utf-8")
+
+    status = detect_reboot_status(
+        modules_dir=modules_dir,
+        running_kernel="7.1.9",
+        marker_paths=(str(marker),),
+    )
+    assert status.required is True
+    assert "linux, systemd" in status.reason
+
+
+def test_system_dry_run_warns_when_reboot_required(monkeypatch, tmp_path: Path) -> None:
+    service = SystemDryRunService()
+    monkeypatch.setattr("dotdoctor.application.system_update.shutil.which", lambda _: None)
+    monkeypatch.setattr(
+        "dotdoctor.application.system_update.detect_reboot_status",
+        lambda: RebootStatus(
+            required=True,
+            reason="Running kernel (7.1.9) differs from installed kernel (7.1.11).",
+            running_kernel="7.1.9",
+            installed_kernels=["7.1.11"],
+        ),
+    )
+
+    report = service.run(_context(tmp_path))
+    by_id = {item.check_id: item for item in report.results}
+    assert by_id["sys:reboot"].severity is Severity.WARN
+    assert "7.1.9" in by_id["sys:reboot"].message
+    assert by_id["sys:reboot"].details["reboot_required"] is True
+
+
+def test_system_upgrade_prints_reboot_warning_when_needed(monkeypatch, tmp_path: Path) -> None:
+    service = SystemUpgradeService()
+    console = DummyConsole()
+
+    def fake_which(name: str) -> str | None:
+        if name in {"yay"}:
+            return f"/usr/bin/{name}"
+        return None
+
+    def fake_run(*args, **kwargs):
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("dotdoctor.application.system_update.shutil.which", fake_which)
+    monkeypatch.setattr("dotdoctor.application.system_update.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "dotdoctor.application.system_update.detect_reboot_status",
+        lambda: RebootStatus(
+            required=True,
+            reason="Running kernel (7.1.9) differs from installed kernel (7.1.11).",
+            running_kernel="7.1.9",
+            installed_kernels=["7.1.11"],
+        ),
+    )
+
+    code = service.run(_context(tmp_path), console)
+    assert code == 0
+    assert any("reboot recommended" in msg.lower() for msg in console.messages)
+    assert any("7.1.11" in msg for msg in console.messages)
+
+
+def test_detect_disk_space_status_healthy(tmp_path: Path) -> None:
+    status = detect_disk_space_status(
+        root_path=tmp_path,
+        boot_path=tmp_path,
+        min_root_warn_bytes=1000,
+        min_root_crit_bytes=100,
+        min_boot_warn_bytes=1000,
+        min_boot_crit_bytes=100,
+    )
+    assert status.severity is Severity.PASS
+    assert "healthy" in status.message
+
+
+def test_detect_disk_space_status_warn(tmp_path: Path) -> None:
+    status = detect_disk_space_status(
+        root_path=tmp_path,
+        boot_path=tmp_path,
+        min_root_warn_bytes=10**15,  # huge threshold to trigger WARN
+        min_root_crit_bytes=100,
+        min_boot_warn_bytes=1000,
+        min_boot_crit_bytes=100,
+    )
+    assert status.severity is Severity.WARN
+    assert "Low disk space" in status.message
+
+
+def test_detect_disk_space_status_critical_fail(tmp_path: Path) -> None:
+    status = detect_disk_space_status(
+        root_path=tmp_path,
+        boot_path=tmp_path,
+        min_root_warn_bytes=10**15,
+        min_root_crit_bytes=10**15,  # huge threshold to trigger FAIL
+        min_boot_warn_bytes=1000,
+        min_boot_crit_bytes=100,
+    )
+    assert status.severity is Severity.FAIL
+    assert "Critically low" in status.message
+
+
+def test_system_upgrade_aborts_on_critical_disk_space(monkeypatch, tmp_path: Path) -> None:
+    service = SystemUpgradeService()
+    console = DummyConsole()
+
+    monkeypatch.setattr(
+        "dotdoctor.application.system_update.detect_disk_space_status",
+        lambda: DiskSpaceStatus(
+            root_free_bytes=100 * 1024**2,
+            boot_free_bytes=10 * 1024**2,
+            severity=Severity.FAIL,
+            message="Critically low disk space (/ free: 100.0 MiB, /boot free: 10.0 MiB).",
+            remediation="Free up space.",
+        ),
+    )
+
+    code = service.run(_context(tmp_path), console)
+    assert code == 1
+    assert any("Aborting update to prevent system corruption" in msg for msg in console.messages)

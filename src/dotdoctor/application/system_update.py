@@ -1,10 +1,12 @@
 import os
+import platform
 import re
 import shutil
 import subprocess
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from pathlib import Path
 
 from rich.console import Console
 
@@ -16,6 +18,142 @@ from dotdoctor.domain.models import CheckResult, ScanReport, Severity
 class _ExecResult:
     completed: subprocess.CompletedProcess[str] | None
     timed_out: bool = False
+
+
+@dataclass(frozen=True)
+class RebootStatus:
+    required: bool
+    reason: str | None
+    running_kernel: str
+    installed_kernels: list[str]
+
+
+def detect_reboot_status(
+    modules_dir: Path = Path("/usr/lib/modules"),
+    running_kernel: str | None = None,
+    marker_paths: tuple[str, ...] = ("/run/reboot-required", "/var/run/reboot-required"),
+) -> RebootStatus:
+    current_kernel = running_kernel or platform.release()
+    installed: list[str] = []
+
+    if modules_dir.exists() and modules_dir.is_dir():
+        try:
+            installed = sorted(
+                [d.name for d in modules_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
+            )
+        except OSError:
+            installed = []
+
+    for marker in marker_paths:
+        marker_path = Path(marker)
+        if marker_path.exists():
+            pkg_file = marker_path.with_suffix(".pkgs")
+            if pkg_file.exists():
+                try:
+                    pkgs = [
+                        p.strip()
+                        for p in pkg_file.read_text(encoding="utf-8").splitlines()
+                        if p.strip()
+                    ]
+                    if pkgs:
+                        return RebootStatus(
+                            required=True,
+                            reason=f"Reboot required by system packages ({', '.join(pkgs)}).",
+                            running_kernel=current_kernel,
+                            installed_kernels=installed,
+                        )
+                except OSError:
+                    pass
+            return RebootStatus(
+                required=True,
+                reason=f"Reboot marker file '{marker}' detected.",
+                running_kernel=current_kernel,
+                installed_kernels=installed,
+            )
+
+    if installed:
+        if current_kernel not in installed:
+            return RebootStatus(
+                required=True,
+                reason=(
+                    f"Running kernel ({current_kernel}) differs from "
+                    f"installed kernel ({', '.join(installed)})."
+                ),
+                running_kernel=current_kernel,
+                installed_kernels=installed,
+            )
+
+    return RebootStatus(
+        required=False,
+        reason=None,
+        running_kernel=current_kernel,
+        installed_kernels=installed,
+    )
+
+
+@dataclass(frozen=True)
+class DiskSpaceStatus:
+    root_free_bytes: int
+    boot_free_bytes: int
+    severity: Severity
+    message: str
+    remediation: str | None
+
+
+def _format_bytes(bytes_count: int) -> str:
+    if bytes_count >= 1024 * 1024 * 1024:
+        return f"{bytes_count / (1024 ** 3):.1f} GiB"
+    if bytes_count >= 1024 * 1024:
+        return f"{bytes_count / (1024 ** 2):.1f} MiB"
+    return f"{bytes_count / 1024:.1f} KiB"
+
+
+def detect_disk_space_status(
+    root_path: str | Path = "/",
+    boot_path: str | Path = "/boot",
+    min_root_warn_bytes: int = 2 * 1024 * 1024 * 1024,  # 2 GiB
+    min_root_crit_bytes: int = 500 * 1024 * 1024,  # 500 MiB
+    min_boot_warn_bytes: int = 150 * 1024 * 1024,  # 150 MiB
+    min_boot_crit_bytes: int = 50 * 1024 * 1024,  # 50 MiB
+) -> DiskSpaceStatus:
+    try:
+        root_free = shutil.disk_usage(root_path).free
+    except OSError:
+        root_free = 0
+
+    try:
+        boot_free = shutil.disk_usage(boot_path).free if Path(boot_path).exists() else root_free
+    except OSError:
+        boot_free = root_free
+
+    root_str = _format_bytes(root_free)
+    boot_str = _format_bytes(boot_free)
+
+    if root_free < min_root_crit_bytes or boot_free < min_boot_crit_bytes:
+        return DiskSpaceStatus(
+            root_free_bytes=root_free,
+            boot_free_bytes=boot_free,
+            severity=Severity.FAIL,
+            message=f"Critically low disk space (/ free: {root_str}, /boot free: {boot_str}).",
+            remediation="Free up disk space immediately before updating packages.",
+        )
+
+    if root_free < min_root_warn_bytes or boot_free < min_boot_warn_bytes:
+        return DiskSpaceStatus(
+            root_free_bytes=root_free,
+            boot_free_bytes=boot_free,
+            severity=Severity.WARN,
+            message=f"Low disk space (/ free: {root_str}, /boot free: {boot_str}).",
+            remediation="Consider cleaning package caches (paccache -r) before updating.",
+        )
+
+    return DiskSpaceStatus(
+        root_free_bytes=root_free,
+        boot_free_bytes=boot_free,
+        severity=Severity.PASS,
+        message=f"Disk space is healthy (/ free: {root_str}, /boot free: {boot_str}).",
+        remediation=None,
+    )
 
 
 @dataclass(frozen=True)
@@ -44,6 +182,16 @@ class SystemDryRunService:
                 check_id="sys:firmware",
                 label="Querying firmware updates...",
                 runner=lambda: self._check_firmware(context),
+            ),
+            SystemCheckTask(
+                check_id="sys:reboot",
+                label="Checking reboot status...",
+                runner=lambda: self._check_reboot(context),
+            ),
+            SystemCheckTask(
+                check_id="sys:disk",
+                label="Checking disk space...",
+                runner=lambda: self._check_disk_space(context),
             ),
         ]
 
@@ -276,6 +424,46 @@ class SystemDryRunService:
             details={"updates": 0},
         )
 
+    def _check_reboot(self, context: ScanContext) -> CheckResult:
+        status = detect_reboot_status()
+        if status.required:
+            return CheckResult(
+                check_id="sys:reboot",
+                severity=Severity.WARN,
+                message=status.reason or "Reboot required.",
+                remediation="Reboot the system to apply kernel or core updates.",
+                details={
+                    "running_kernel": status.running_kernel,
+                    "installed_kernels": status.installed_kernels,
+                    "reboot_required": True,
+                },
+            )
+
+        return CheckResult(
+            check_id="sys:reboot",
+            severity=Severity.PASS,
+            message="System is running the latest installed kernel.",
+            remediation=None,
+            details={
+                "running_kernel": status.running_kernel,
+                "installed_kernels": status.installed_kernels,
+                "reboot_required": False,
+            },
+        )
+
+    def _check_disk_space(self, context: ScanContext) -> CheckResult:
+        status = detect_disk_space_status()
+        return CheckResult(
+            check_id="sys:disk",
+            severity=status.severity,
+            message=status.message,
+            remediation=status.remediation,
+            details={
+                "root_free_bytes": status.root_free_bytes,
+                "boot_free_bytes": status.boot_free_bytes,
+            },
+        )
+
     def _check_aur_packages(self, context: ScanContext) -> CheckResult:
         result = _run_capture(["yay", "-Qua"], timeout=60)
         if result.timed_out:
@@ -430,6 +618,18 @@ class SystemUpgradeService:
     """Runs sequential interactive system update commands."""
 
     def run(self, context: ScanContext, console: Console) -> int:
+        disk_status = detect_disk_space_status()
+        if disk_status.severity == Severity.FAIL:
+            console.print(
+                f"[red]FAIL: {disk_status.message} "
+                "Aborting update to prevent system corruption.[/red]"
+            )
+            return 1
+        if disk_status.severity == Severity.WARN:
+            console.print(
+                f"[yellow]Warning: {disk_status.message} Proceeding with caution...[/yellow]"
+            )
+
         console.print("[cyan]Caching sudo credentials...[/cyan]")
         sudo_cache = subprocess.run(["sudo", "true"], check=False)
         if sudo_cache.returncode != 0:
@@ -441,7 +641,16 @@ class SystemUpgradeService:
 
         if shutil.which("yay") is not None:
             yay_error, is_net_failure = self._run_step(
-                ["yay", "-Syu", "--noconfirm"],
+                [
+                    "yay",
+                    "-Syu",
+                    "--noconfirm",
+                    "--sudoloop",
+                    "--answerclean",
+                    "None",
+                    "--answerdiff",
+                    "None",
+                ],
                 console,
                 "System and AUR update",
             )
@@ -457,7 +666,16 @@ class SystemUpgradeService:
                     )
                     return 1
                 retry_error, _ = self._run_step(
-                    ["yay", "-Syu", "--noconfirm"],
+                    [
+                        "yay",
+                        "-Syu",
+                        "--noconfirm",
+                        "--sudoloop",
+                        "--answerclean",
+                        "None",
+                        "--answerdiff",
+                        "None",
+                    ],
                     console,
                     "System and AUR update (retry after mirror recovery)",
                 )
@@ -494,13 +712,24 @@ class SystemUpgradeService:
             fw_error, _ = self._run_step(["fwupdmgr", "update", "-y"], console, "Firmware update")
             had_error |= fw_error
         else:
-            console.print("[dim]Skipping firmware update: component is not installed.[/red]")
+            console.print("[dim]Skipping firmware update: component is not installed.[/dim]")
 
+        reboot_status = detect_reboot_status()
         if had_error:
             console.print("[yellow]System update finished with warnings/errors.[/yellow]")
+            if reboot_status.required:
+                console.print(
+                    f"\n[bold yellow]⚠️  System reboot recommended:[/bold yellow] "
+                    f"[yellow]{reboot_status.reason}[/yellow]"
+                )
             return 2
 
         console.print("[green]System update completed successfully![/green]")
+        if reboot_status.required:
+            console.print(
+                f"\n[bold yellow]⚠️  System reboot recommended:[/bold yellow] "
+                f"[yellow]{reboot_status.reason}[/yellow]"
+            )
         return 0
 
     def _refresh_mirrors(self, console: Console) -> bool:
@@ -546,8 +775,11 @@ class SystemUpgradeService:
             return True, False
 
         if completed.returncode != 0:
-            is_net_failure = _is_mirror_failure(completed.stderr)
+            stderr_output = (completed.stderr or "").strip()
+            is_net_failure = _is_mirror_failure(stderr_output)
             console.print(f"[red]{title} failed (exit={completed.returncode}).[/red]")
+            if stderr_output:
+                console.print(f"[red]{stderr_output}[/red]")
             return True, is_net_failure
         return False, False
 

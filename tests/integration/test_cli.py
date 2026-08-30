@@ -138,7 +138,9 @@ profiles:
 
 
 def test_root_sys_runs_dry_run_report(monkeypatch) -> None:
-    def fake_run(self, context):
+    def fake_run(self, context, on_task_complete=None):
+        if on_task_complete:
+            on_task_complete("sys:packages")
         return ScanReport(
             profile="system",
             results=[
@@ -151,6 +153,10 @@ def test_root_sys_runs_dry_run_report(monkeypatch) -> None:
             ],
         )
 
+    monkeypatch.setattr(
+        "dotdoctor.application.system_update.SystemDryRunService.run_with_progress",
+        fake_run,
+    )
     monkeypatch.setattr("dotdoctor.application.system_update.SystemDryRunService.run", fake_run)
 
     result = runner.invoke(app, ["--sys"])
