@@ -1,3 +1,4 @@
+import difflib
 import json
 import shutil
 from collections.abc import Callable
@@ -7,6 +8,8 @@ from typing import Any
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
+from rich.syntax import Syntax
 
 from dotdoctor.domain.context import ScanContext
 from dotdoctor.domain.models import CheckResult, ScanReport, Severity
@@ -39,6 +42,9 @@ class InteractiveAutoFixer:
                 continue
 
             had_issues = True
+
+            if result.check_id == "path.integrity":
+                self._preview_path_integrity_diff(context)
 
             prompt = self._build_prompt_message(result)
             should_fix = typer.confirm(prompt, default=True)
@@ -88,6 +94,59 @@ class InteractiveAutoFixer:
             "path.integrity": self._fix_path_integrity,
         }
         return handlers.get(check_id)
+
+    def _preview_path_integrity_diff(self, context: ScanContext) -> None:
+        raw_entries = context.path_value.split(":") if context.path_value else []
+        cleaned: list[str] = []
+        seen: set[str] = set()
+
+        for entry in raw_entries:
+            if not entry:
+                continue
+            normalized = str(Path(entry).expanduser().resolve(strict=False))
+            if normalized in seen:
+                continue
+            if not Path(normalized).exists():
+                continue
+            seen.add(normalized)
+            cleaned.append(normalized)
+
+        if not cleaned:
+            return
+
+        prefs = self._load_preferences(context.home)
+        shell_name = self._selected_shell or prefs.get("shell")
+        if not shell_name:
+            shell_name = "zsh" if (context.shell or "").endswith("zsh") else "bash"
+
+        target_file = context.home / (".zshrc" if shell_name == "zsh" else ".bashrc")
+        original = target_file.read_text(encoding="utf-8") if target_file.exists() else ""
+        updated = self._upsert_managed_path_block(original, cleaned)
+
+        if original != updated:
+            self._render_diff_preview(target_file, original, updated)
+
+    def _render_diff_preview(self, filepath: Path, original: str, updated: str) -> None:
+        diff_lines = list(
+            difflib.unified_diff(
+                original.splitlines(keepends=True),
+                updated.splitlines(keepends=True),
+                fromfile=f"a/{filepath.name}",
+                tofile=f"b/{filepath.name}",
+            )
+        )
+        if not diff_lines:
+            return
+
+        diff_text = "".join(diff_lines)
+        syntax = Syntax(diff_text, "diff", theme="monokai", background_color="default")
+        self._console.print(
+            Panel(
+                syntax,
+                title=f"[cyan]Proposed Diff: {filepath.name}[/cyan]",
+                border_style="cyan",
+            )
+        )
 
     def _build_prompt_message(self, result: CheckResult) -> str:
         duplicates = result.details.get("duplicate_entries", [])
