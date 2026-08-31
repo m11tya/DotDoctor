@@ -9,6 +9,7 @@ from dotdoctor.application.system_update import (
     SystemUpgradeService,
     detect_disk_space_status,
     detect_reboot_status,
+    is_online,
 )
 from dotdoctor.domain.context import ScanContext
 from dotdoctor.domain.models import Severity
@@ -584,3 +585,69 @@ def test_system_upgrade_aborts_on_critical_disk_space(monkeypatch, tmp_path: Pat
     code = service.run(_context(tmp_path), console)
     assert code == 1
     assert any("Aborting update to prevent system corruption" in msg for msg in console.messages)
+
+
+def test_is_online_success(monkeypatch) -> None:
+    class DummySocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr("socket.create_connection", lambda *args, **kwargs: DummySocket())
+    assert is_online() is True
+
+
+def test_is_online_failure(monkeypatch) -> None:
+    def fake_connect(*args, **kwargs):
+        raise OSError("Network unreachable")
+
+    monkeypatch.setattr("socket.create_connection", fake_connect)
+    assert is_online() is False
+
+
+def test_system_dry_run_offline_skips_network_checks(monkeypatch, tmp_path: Path) -> None:
+    service = SystemDryRunService(is_online_fn=lambda: False)
+
+    monkeypatch.setattr(
+        "dotdoctor.application.system_update.detect_reboot_status",
+        lambda: RebootStatus(
+            required=False,
+            reason=None,
+            running_kernel="7.1.9",
+            installed_kernels=["7.1.9"],
+        ),
+    )
+    monkeypatch.setattr(
+        "dotdoctor.application.system_update.detect_disk_space_status",
+        lambda: DiskSpaceStatus(
+            root_free_bytes=50 * 1024**3,
+            boot_free_bytes=500 * 1024**2,
+            severity=Severity.PASS,
+            message="Disk space is healthy.",
+            remediation=None,
+        ),
+    )
+
+    report = service.run(_context(tmp_path))
+    by_id = {item.check_id: item for item in report.results}
+
+    assert "sys:network" in by_id
+    assert by_id["sys:network"].severity is Severity.FAIL
+    assert "No active internet connection" in by_id["sys:network"].message
+    assert "sys:packages" not in by_id
+    assert "sys:aur" not in by_id
+    assert "sys:flatpak" not in by_id
+    assert "sys:firmware" not in by_id
+    assert "sys:reboot" in by_id
+    assert "sys:disk" in by_id
+
+
+def test_system_upgrade_offline_aborts_immediately(tmp_path: Path) -> None:
+    service = SystemUpgradeService(is_online_fn=lambda: False)
+    console = DummyConsole()
+
+    code = service.run(_context(tmp_path), console)
+    assert code == 1
+    assert any("No active internet connection detected" in msg for msg in console.messages)

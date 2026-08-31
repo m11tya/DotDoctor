@@ -2,6 +2,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -12,6 +13,24 @@ from rich.console import Console
 
 from dotdoctor.domain.context import ScanContext
 from dotdoctor.domain.models import CheckResult, ScanReport, Severity
+
+
+def is_online(
+    targets: tuple[tuple[str, int], ...] = (
+        ("1.1.1.1", 53),
+        ("8.8.8.8", 53),
+        ("9.9.9.9", 53),
+    ),
+    timeout: float = 1.5,
+) -> bool:
+    """Check if the system has an active internet connection."""
+    for host, port in targets:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except (OSError, TimeoutError):
+            continue
+    return False
 
 
 @dataclass(frozen=True)
@@ -166,7 +185,39 @@ class SystemCheckTask:
 class SystemDryRunService:
     """Runs parallel dry-run checks for package update availability."""
 
+    def __init__(self, is_online_fn: Callable[[], bool] = is_online) -> None:
+        self._is_online_fn = is_online_fn
+
     def build_tasks(self, context: ScanContext) -> list[SystemCheckTask]:
+        if not self._is_online_fn():
+            return [
+                SystemCheckTask(
+                    check_id="sys:network",
+                    label="Checking network connection...",
+                    runner=lambda: CheckResult(
+                        check_id="sys:network",
+                        severity=Severity.FAIL,
+                        message=(
+                            "No active internet connection detected — "
+                            "online update checks skipped."
+                        ),
+                        remediation=(
+                            "Connect to the internet to check for package " "and system updates."
+                        ),
+                    ),
+                ),
+                SystemCheckTask(
+                    check_id="sys:reboot",
+                    label="Checking reboot status...",
+                    runner=lambda: self._check_reboot(context),
+                ),
+                SystemCheckTask(
+                    check_id="sys:disk",
+                    label="Checking disk space...",
+                    runner=lambda: self._check_disk_space(context),
+                ),
+            ]
+
         tasks: list[SystemCheckTask] = [
             SystemCheckTask(
                 check_id="sys:packages",
@@ -617,7 +668,17 @@ def _detect_oh_my_zsh_updates(omz_path: str) -> int:
 class SystemUpgradeService:
     """Runs sequential interactive system update commands."""
 
+    def __init__(self, is_online_fn: Callable[[], bool] = is_online) -> None:
+        self._is_online_fn = is_online_fn
+
     def run(self, context: ScanContext, console: Console) -> int:
+        if not self._is_online_fn():
+            console.print(
+                "[red]FAIL: No active internet connection detected. "
+                "Aborting system upgrade.[/red]"
+            )
+            return 1
+
         disk_status = detect_disk_space_status()
         if disk_status.severity == Severity.FAIL:
             console.print(
